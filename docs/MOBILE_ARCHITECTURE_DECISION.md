@@ -1,164 +1,197 @@
-# TRINITY.AI — Mobile Architecture Decision
+# TRINITY.AI --- Mobile Architecture Decision
 
-**Data:** 2026-08-24  
-**Status:** APROVADO (decisão arquitetural, sem implementação nesta fase)  
-**Autor:** Diego  
-**Fase de referência:** G (pós-G-4, pré-G-5)
+**Date:** 2026-08-24
 
----
+**Status:** APPROVED (architectural decision, no implementation in this
+phase)
 
-## 1. Contexto e objetivo
+**Author:** Diego
 
-TRINITY.AI será lançado como plataforma multi-cliente: API backend (Core), aplicação desktop
-(Electron), aplicação web (Next.js) e, futuramente, aplicativo móvel nativo (iOS + Android).
+**Reference phase:** G (post-G-4, pre-G-5)
 
-Este documento registra a decisão de arquitetura mobile **antes** da implementação, para garantir
-que as fases em andamento (G-5 em diante) não criem dívidas técnicas que dificultem o cliente
-móvel.
+------------------------------------------------------------------------
 
-A análise cobre 10 áreas de compatibilidade. Nenhuma modificação de código foi necessária —
-a API atual é mobile-ready.
+## 1. Context and objective
 
----
+TRINITY.AI will be launched as a multi-client platform: backend API
+(Core), desktop application (Electron), web application (Next.js), and,
+in the future, a native mobile application (iOS + Android).
 
-## 2. Auditoria de compatibilidade — 10 áreas
+This document records the mobile architecture decision **before**
+implementation, to ensure that the ongoing phases (G-5 onward) do not
+create technical debt that would make the mobile client more difficult
+to build.
 
-### Área 1: Compatibilidade da API REST com clientes móveis
+The analysis covers 10 compatibility areas. No code changes were
+necessary --- the current API is mobile-ready.
 
-**Veredicto: ✅ Totalmente compatível**
+------------------------------------------------------------------------
 
-| Aspecto | Status |
+## 2. Compatibility audit --- 10 areas
+
+### Area 1: REST API compatibility with mobile clients
+
+**Verdict: ✅ Fully compatible**
+
+  | Aspect | Status |
 |---|---|
-| Protocolo | HTTP/1.1 REST + JSON — padrão universal |
-| Autenticação | `Authorization: Bearer <token>` — compatível com todos os frameworks |
-| Respostas | JSON com Pydantic schemas — tipagem segura |
-| CORS | `allowed_origins: list[str]` configurável via env var (`ALLOWED_ORIGINS`) |
-| Erros | HTTP status codes padrão (401, 404, 422, 429) |
-| Paginação | `SessionListResponse` retorna `total` — pronto para listas |
+| Protocol | HTTP/1.1 REST + JSON — universal standard |
+| Authentication | `Authorization: Bearer <token>` — compatible with all frameworks |
+| Responses | JSON with Pydantic schemas — type-safe |
+| CORS | `allowed_origins: list[str]` configurable via env var (`ALLOWED_ORIGINS`) |
+| Errors | Standard HTTP status codes (401, 404, 422, 429) |
+| Pagination | `SessionListResponse` returns `total` — ready for lists |
 
-**CORS em produção:** `config.py:54` default `["http://localhost:3000", "http://localhost:3001"]`.
-Para mobile nativo, CORS não se aplica (cliente não é browser). Para PWA, adicionar domínio
-de produção. O validator de produção (`config.py:116`) rejeita `localhost` em prod —
-comportamento correto.
+**CORS in production:** `config.py:54` defaults to
+`["http://localhost:3000", "http://localhost:3001"]`. For native mobile,
+CORS does not apply (the client is not a browser). For a PWA, add the
+production domain. The production validator (`config.py:116`) rejects
+`localhost` in production --- correct behavior.
 
----
+------------------------------------------------------------------------
 
-### Área 2: Autenticação JWT para mobile
+### Area 2: JWT authentication for mobile
 
-**Veredicto: ✅ Compatível — Bearer é o padrão correto para mobile**
+**Verdict: ✅ Compatible --- Bearer is the correct standard for mobile**
 
-```
+``` text
 POST /auth/register  →  { access_token, user_id, email }
 POST /auth/login     →  { access_token, user_id, email }
 GET  /auth/me        →  { id, email, full_name, plan, is_active, created_at }
 ```
 
-- **Algoritmo:** HS256 (via `python-jose`) — `config.py:44`
-- **Expiração:** `jwt_expiration_minutes: int = 60 * 24` (24 horas) — adequado para mobile
-- **Armazenamento no mobile:**
-  - React Native: `expo-secure-store` (iOS Keychain / Android Keystore) — **recomendado**
-  - Flutter: `flutter_secure_storage`
-  - PWA: `localStorage` (mesmo padrão do desktop/web atual)
+-   **Algorithm:** HS256 (via `python-jose`) --- `config.py:44`
+-   **Expiration:** `jwt_expiration_minutes: int = 60 * 24` (24 hours)
+    --- suitable for mobile
+-   **Storage on mobile:**
+    -   React Native: `expo-secure-store` (iOS Keychain / Android
+        Keystore) --- **recommended**
+    -   Flutter: `flutter_secure_storage`
+    -   PWA: `localStorage` (same pattern as the current desktop/web
+        implementation)
 
-**Limitação identificada (não bloqueante):** Sem refresh token — sessão expira em 24h.
-Workaround aceitável para MVP: re-login automático quando 401. Refresh tokens são Fase 8+.
+**Identified limitation (non-blocking):** No refresh token --- the
+session expires after 24 hours. Acceptable workaround for the MVP:
+automatically log in again when a 401 is received. Refresh tokens are
+planned for Phase 8+.
 
-**GET /auth/me após login:** O desktop tem bug de `plan` hardcoded (corrigido no web).
-No mobile, sempre chamar `GET /auth/me` após login para obter o plano real.
+**GET /auth/me after login:** The desktop app has a bug where `plan` is
+hardcoded (fixed in web). On mobile, always call `GET /auth/me` after
+login to retrieve the actual plan.
 
----
+------------------------------------------------------------------------
 
-### Área 3: SSE (Server-Sent Events) no Android e iOS
+### Area 3: SSE (Server-Sent Events) on Android and iOS
 
-**Veredicto: ⚠️ Compatível com polyfill — sem bloqueio arquitetural**
+**Verdict: ⚠️ Compatible with a polyfill --- no architectural blocker**
 
-O Core usa SSE via `StreamingResponse` com `media_type="text/event-stream"` para:
-- `POST /sessions/{id}/chat` — streaming de chat
-- `POST /sessions/{id}/agent` — streaming de agente
-- `POST /workspaces/code/{id}/execute` — streaming de execução de código
+The Core uses SSE via `StreamingResponse` with
+`media_type="text/event-stream"` for:
 
-**Compatibilidade por plataforma:**
+-   `POST /sessions/{id}/chat` --- chat streaming
+-   `POST /sessions/{id}/agent` --- agent streaming
+-   `POST /workspaces/code/{id}/execute` --- code execution streaming
 
-| Plataforma | `EventSource` nativo | `ReadableStream.getReader()` | Solução |
+**Compatibility by platform:**
+
+  | Platform | Native `EventSource` | `ReadableStream.getReader()` | Solution |
 |---|---|---|---|
-| iOS Safari (web/PWA) | ✅ desde iOS 9 | ✅ | Nativo |
-| Android Chrome (web/PWA) | ✅ desde 2012 | ✅ | Nativo |
-| React Native | ❌ ausente | ❌ ausente | Polyfill necessário |
-| Flutter | ❌ ausente | N/A (Dart) | `http` package com `Stream` |
-| Expo (managed) | ❌ ausente | ❌ ausente | Polyfill necessário |
+| iOS Safari (web/PWA) | ✅ Since iOS 9 | ✅ | Native |
+| Android Chrome (web/PWA) | ✅ Since 2012 | ✅ | Native |
+| React Native | ❌ Not available | ❌ Not available | Polyfill required |
+| Flutter | ❌ Not available | N/A (Dart) | `http` package with `Stream` |
+| Expo (managed) | ❌ Not available | ❌ Not available | Polyfill required |
 
-**Polyfill para React Native:** `react-native-sse` (NPM, 1.5k stars) implementa
-`EventSource` conforme especificação W3C. Alternativa: parser manual sobre
-`fetch` com `ReadableStream` via polyfill `react-native-fetch-api`.
+**Polyfill for React Native:** `react-native-sse` (NPM, 1.5k stars)
+implements `EventSource` according to the W3C specification.
+Alternative: a manual parser over `fetch` with `ReadableStream` via the
+`react-native-fetch-api` polyfill.
 
-**Formato SSE atual (sem mudança necessária no Core):**
-```
+**Current SSE format (no Core changes needed):**
+
+``` text
 data: {"type":"text","content":"..."}\n\n
+
 data: {"type":"done","session_id":"...","usage":{...}}\n\n
+
 data: [DONE]\n\n
 ```
 
-O formato `data: JSON\n\n` é o padrão W3C — polyfills leem corretamente.
+The `data: JSON\n\n` format is the W3C standard --- polyfills read it
+correctly.
 
----
+------------------------------------------------------------------------
 
-### Área 4: TRINITY CODE em mobile
+### Area 4: TRINITY CODE on mobile
 
-**Veredicto: ✅ Sem bloqueador — mobile é cliente puro**
+**Verdict: ✅ No blocker --- mobile is a pure client**
 
-`POST /workspaces/code/{workspace_id}/execute` (`workspaces.py:98`) retorna SSE.
+`POST /workspaces/code/{workspace_id}/execute` (`workspaces.py:98`)
+returns SSE.
 
-- **Docker:** roda no servidor, não no dispositivo móvel — zero impacto
-- **Mobile flow:** usuário digita comando → request JSON → SSE stream de output
-- **Timeout:** `CodeRunRequest.timeout` validado no schema (ge=1, le=120) — mobile respeitará
-- **Feedback visual:** eventos `tool_status` → `output` → `done` mapeiam naturalmente
-  para uma UI de terminal embutida no mobile
+-   **Docker:** runs on the server, not on the mobile device --- zero
+    impact
+-   **Mobile flow:** user enters a command → JSON request → SSE output
+    stream
+-   **Timeout:** `CodeRunRequest.timeout` is validated in the schema
+    (`ge=1, le=120`) --- mobile must respect it
+-   **Visual feedback:** `tool_status` → `output` → `done` events map
+    naturally to an embedded terminal UI on mobile
 
-**UX recommendation:** usar fonte monospace (`JetBrains Mono` / `Courier New`) para output.
+**UX recommendation:** use a monospace font (`JetBrains Mono` /
+`Courier New`) for output.
 
----
+------------------------------------------------------------------------
 
-### Área 5: TRINITY WORK — limitações em mobile
+### Area 5: TRINITY WORK --- mobile limitations
 
-**Veredicto: ⚠️ Limitação identificada — sem bloqueio para G-5**
+**Verdict: ⚠️ Limitation identified --- no blocker for G-5**
 
-WORK workspace tem campo `requires_approval` / `approval_policy` (WorkWorkspace model).
-Fluxo de aprovação planejado: agente solicita ação → humano aprova/rejeita.
+The WORK workspace has the `requires_approval` / `approval_policy`
+fields (`WorkWorkspace` model). The planned approval flow is: agent
+requests an action → human approves/rejects.
 
-**Gap para mobile:**
-- Sem mecanismo de push notification quando há ação pendente de aprovação
-- Mobile precisaria de polling ou WebSocket (não implementado) para receber alertas
-- O endpoint de aprovação ainda não existe (Fase G+)
+**Gap for mobile:**
 
-**Recomendação:** quando implementar TRINITY WORK em mobile, adicionar webhook/FCM
-(Firebase Cloud Messaging) no backend para disparar push notifications.
-Este gap não afeta G-5 (AuditLog/PermissionGateway).
+-   No push-notification mechanism when an action is awaiting approval
+-   Mobile would need polling or WebSocket (not implemented) to receive
+    alerts
+-   The approval endpoint does not yet exist (Phase G+)
 
----
+**Recommendation:** when implementing TRINITY WORK on mobile, add a
+webhook/FCM (Firebase Cloud Messaging) integration in the backend to
+send push notifications. This gap does not affect G-5
+(AuditLog/PermissionGateway).
 
-### Área 6: Comparação de frameworks mobile
+------------------------------------------------------------------------
 
-| Framework | Reuso de código | Performance | SSE | Maturidade | Ecossistema |
+### Area 6: Mobile framework comparison
+
+  | Framework | Code reuse | Performance | SSE | Maturity | Ecosystem |
 |---|---|---|---|---|---|
-| **React Native + Expo** | ✅✅ Alto (TS + React) | ✅ Boa | Polyfill simples | ✅✅ Maduro | ✅✅ Grande |
-| Flutter | ❌ Baixo (Dart) | ✅✅ Excelente | Dart Stream | ✅✅ Maduro | ✅ Crescendo |
-| Capacitor (wrapper) | ✅✅ Máximo (web=mobile) | ⚠️ WebView | ✅ Nativo | ✅ Maduro | Médio |
-| PWA | ✅✅ Máximo (web=mobile) | ⚠️ Limitações iOS | ✅ Nativo | ✅ Estável | N/A |
+| **React Native + Expo** | ✅✅ High (TS + React) | ✅ Good | Simple polyfill | ✅✅ Mature | ✅✅ Large |
+| Flutter | ❌ Low (Dart) | ✅✅ Excellent | Dart Stream | ✅✅ Mature | ✅ Growing |
+| Capacitor (wrapper) | ✅✅ Maximum (web = mobile) | ⚠️ WebView | ✅ Native | ✅ Mature | Medium |
+| PWA | ✅✅ Maximum (web = mobile) | ⚠️ iOS limitations | ✅ Native | ✅ Stable | N/A |
 
-**Análise de custos de reuso:**
+**Code-reuse cost analysis:**
 
-TRINITY já possui TypeScript + React + Zustand + tipos compartilhados (`types.ts`).
-Com React Native + Expo:
-- `types.ts` → reuso 100%
-- `useAppStore.ts` → reuso ~90% (trocar localStorage por AsyncStorage)
-- `api/client.ts` → reuso ~85% (trocar `ReadableStream` por polyfill SSE)
-- UI components → reuso ~30% (adaptar Tailwind para StyleSheet ou NativeWind)
+TRINITY already has TypeScript + React + Zustand + shared types
+(`types.ts`). With React Native + Expo:
 
----
+-   `types.ts` → 100% reuse
+-   `useAppStore.ts` → \~90% reuse (replace `localStorage` with
+    AsyncStorage)
+-   `api/client.ts` → \~85% reuse (replace `ReadableStream` with an SSE
+    polyfill)
+-   UI components → \~30% reuse (adapt Tailwind to StyleSheet or
+    NativeWind)
 
-### Área 7: Estrutura de monorepo proposta
+------------------------------------------------------------------------
 
-```
+### Area 7: Proposed monorepo structure
+
+``` text
 packages/
 ├── core/              (FastAPI — Python)
 ├── agent/             (Agent executor — Python)
@@ -166,7 +199,7 @@ packages/
 ├── sandbox/           (Docker sandbox — Python)
 ├── desktop/           (Electron + React — TypeScript)
 ├── web/               (Next.js 14 — TypeScript)
-└── mobile/            (Expo + React Native — TypeScript)  ← Fase futura
+└── mobile/            (Expo + React Native — TypeScript)  ← Future phase
     ├── app/
     │   ├── _layout.tsx
     │   ├── (auth)/
@@ -176,15 +209,16 @@ packages/
     │       ├── code/
     │       └── settings/
     ├── src/
-    │   ├── api/client.ts     (baseado em packages/web/src/api/client.ts)
-    │   ├── store/            (Zustand, igual ao web)
-    │   └── types.ts          (cópia de packages/web/src/types.ts)
+    │   ├── api/client.ts     (based on packages/web/src/api/client.ts)
+    │   ├── store/            (Zustand, same as web)
+    │   └── types.ts          (copy of packages/web/src/types.ts)
     ├── package.json
     └── app.json
 ```
 
-**Dependências a adicionar em `packages/mobile`:**
-```json
+**Dependencies to add in `packages/mobile`:**
+
+``` json
 {
   "expo": "~51",
   "react-native": "0.74",
@@ -195,88 +229,104 @@ packages/
 }
 ```
 
-**Não é necessário modificar `packages/core/`.**
+**There is no need to modify `packages/core/`.**
 
----
+------------------------------------------------------------------------
 
-### Área 8: Princípios arquiteturais para compatibilidade mobile
+### Area 8: Architectural principles for mobile compatibility
 
-Os seguintes princípios do Core garantem compatibilidade mobile sem modificação:
+The following Core principles ensure mobile compatibility without
+modifications:
 
-1. **API-first:** backend completamente agnóstico de cliente (sem server-side rendering)
-2. **Bearer JWT stateless:** mobile não depende de cookies ou sessões de servidor
-3. **JSON schemas validados (Pydantic):** clientes podem gerar tipos automaticamente
-4. **SSE format W3C:** `data: JSON\n\n` — polyfills implementam fielmente
-5. **CORS configurável:** `ALLOWED_ORIGINS` env var — sem `*` em produção
-6. **HTTP status semânticos:** 401/403/404/422/429 — mobile trata igual ao web
+1.  **API-first:** backend is completely client-agnostic (no server-side
+    rendering)
+2.  **Stateless Bearer JWT:** mobile does not depend on cookies or
+    server sessions
+3.  **Validated JSON schemas (Pydantic):** clients can generate types
+    automatically
+4.  **W3C SSE format:** `data: JSON\n\n` --- polyfills implement it
+    faithfully
+5.  **Configurable CORS:** `ALLOWED_ORIGINS` env var --- no `*` in
+    production
+6.  **Semantic HTTP statuses:** 401/403/404/422/429 --- mobile handles
+    them the same way as web
 
-**Princípio a reforçar em fases futuras:** nunca adicionar lógica que assuma
-`window`, `localStorage`, `document` ou DOM no backend.
+**Principle to reinforce in future phases:** never add logic that
+assumes `window`, `localStorage`, `document`, or the DOM in the backend.
 
----
+------------------------------------------------------------------------
 
-### Área 9: Impacto nas fases futuras
+### Area 9: Impact on future phases
 
-| Fase | Impacto em mobile | Ação necessária |
+  | Phase | Impact on mobile | Required action |
 |---|---|---|
-| G-5 (AuditLog + PermissionGateway) | Nenhum — backend only | Nada |
-| Fase 7 (Web MVP) | Base de código compartilhável | Manter `types.ts` sincronizado |
-| Fase 8 (Billing) | Payment sheet mobile-specific | Backend agnóstico (webhook) |
-| Fase 9 (Memory) | Agnóstico de cliente | Nada |
-| Fase Mobile | Implementar `packages/mobile` | Ver estrutura Área 7 |
+| G-5 (AuditLog + PermissionGateway) | None — backend only | None |
+| Phase 7 (Web MVP) | Shareable codebase | Keep `types.ts` synchronized |
+| Phase 8 (Billing) | Mobile-specific payment sheet | Keep backend client-agnostic (webhook) |
+| Phase 9 (Memory) | Client-agnostic | None |
+| Mobile phase | Implement `packages/mobile` | See structure in Area 7 |
 
-**Push notifications (WORK approval):** quando implementar aprovação de ações do agente,
-adicionar `device_token` ao User model e integração com FCM/APNs. Backend fica com endpoint
+**Push notifications (WORK approval):** when implementing agent action
+approval, add `device_token` to the User model and integrate with
+FCM/APNs. The backend will have the endpoint
 `POST /users/me/device-token`.
 
----
+------------------------------------------------------------------------
 
-### Área 10: Conclusão e decisão
+### Area 10: Conclusion and decision
 
-**Decisão arquitetural:** **React Native com Expo**
+**Architectural decision: React Native with Expo**
 
-**Razão:** máximo reuso de código TypeScript, React, Zustand e tipos já existentes.
-A curva de aprendizado é mínima dado que o time já trabalha com React no desktop e web.
+**Reason:** maximum code reuse for existing TypeScript, React, Zustand,
+and types. The learning curve is minimal because the team already works
+with React on desktop and web.
 
-**Quando implementar:** após Fase 7 (Web MVP). O web MVP valida a API client layer
-e a store — o mobile herda essa base testada.
+**When to implement:** after Phase 7 (Web MVP). The web MVP validates
+the API client layer and store --- mobile can inherit this tested
+foundation.
 
-**Pré-requisitos antes de iniciar o mobile:**
-- [ ] `packages/web/` estável e com testes passando
-- [ ] `types.ts` sincronizado entre `web/` e `mobile/`
-- [ ] API base URL configurável via env (`EXPO_PUBLIC_API_URL`)
-- [ ] `expo-secure-store` para JWT (não localStorage)
-- [ ] Polyfill SSE: `react-native-sse`
+**Prerequisites before starting mobile:**
 
-**Nenhum arquivo de backend precisa ser modificado para suportar mobile.**
+-   [ ] `packages/web/` is stable and its tests are passing
+-   [ ] `types.ts` is synchronized between `web/` and `mobile/`
+-   [ ] API base URL is configurable via env (`EXPO_PUBLIC_API_URL`)
+-   [ ] `expo-secure-store` is used for JWT (not `localStorage`)
+-   [ ] SSE polyfill: `react-native-sse`
 
----
+**No backend files need to be modified to support mobile.**
 
-## 3. Problemas críticos encontrados
+------------------------------------------------------------------------
 
-**Nenhum.** A API atual é mobile-ready sem modificações.
+## 3. Critical issues found
 
-Limitações documentadas (não bloqueantes para G-5):
-- SSE requer polyfill em React Native (decisão de implementação, não arquitetural)
-- Sem refresh token (aceitável para MVP, Fase 8+)
-- WORK approval sem push notifications (Fase futura)
+**None.** The current API is mobile-ready without modifications.
 
----
+Documented limitations (not blockers for G-5):
 
-## 4. Estado dos testes (confirmado)
+-   SSE requires a polyfill in React Native (an implementation decision,
+    not an architectural one)
+-   No refresh token (acceptable for the MVP, Phase 8+)
+-   WORK approval has no push notifications (future phase)
 
-Auditoria realizada com base em leitura de código — zero modificações feitas.
-Testes executados após auditoria: **385 passed, 3 skipped, 0 failed**.
+------------------------------------------------------------------------
 
-Arquivos inspecionados:
-- `packages/core/src/main.py` — CORS middleware
-- `packages/core/src/config.py` — `allowed_origins`, JWT settings
-- `packages/core/src/services/auth_service.py` — JWT criação/decode
-- `packages/core/src/schemas/auth.py` — schemas de auth
-- `packages/core/src/api/routes/auth.py` — endpoints de auth
-- `packages/core/src/api/routes/sessions.py` — SSE chat/agent
-- `packages/core/src/api/routes/workspaces.py` — SSE code execute
-- `packages/core/src/services/code_service.py` — stream_code_execute
-- `packages/core/src/schemas/code.py` — CodeRunRequest
-- `packages/desktop/src/renderer/src/api/client.ts` — padrão SSE ReadableStream
-- `packages/desktop/src/renderer/src/types.ts` — tipos compartilháveis
+## 4. Test status (confirmed)
+
+The audit was performed by reading the code --- no modifications were
+made. Tests run after the audit: **385 passed, 3 skipped, 0 failed**.
+
+Files inspected:
+
+-   `packages/core/src/main.py` --- CORS middleware
+-   `packages/core/src/config.py` --- `allowed_origins`, JWT settings
+-   `packages/core/src/services/auth_service.py` --- JWT creation/decode
+-   `packages/core/src/schemas/auth.py` --- auth schemas
+-   `packages/core/src/api/routes/auth.py` --- auth endpoints
+-   `packages/core/src/api/routes/sessions.py` --- chat/agent SSE
+-   `packages/core/src/api/routes/workspaces.py` --- code execution SSE
+-   `packages/core/src/services/code_service.py` ---
+    `stream_code_execute`
+-   `packages/core/src/schemas/code.py` --- `CodeRunRequest`
+-   `packages/desktop/src/renderer/src/api/client.ts` --- SSE
+    `ReadableStream` pattern
+-   `packages/desktop/src/renderer/src/types.ts` --- shareable types
